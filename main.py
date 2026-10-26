@@ -1,6 +1,6 @@
 import argparse
 import hw1
-import hw2
+import hw2.hw2 as hw2
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

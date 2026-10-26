@@ -3,7 +3,7 @@ import device
 import buffer
 import window
 import math
-from . import hw2_scene
+from .. import hw2_scene
 import time
 import statistics
 import numpy as np
