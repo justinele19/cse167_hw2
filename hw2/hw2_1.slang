@@ -1,3 +1,10 @@
+// Eq. 4: E(p) = (p - a) . n, where n = (e.y, -e.x) and e = b - a
+float edge(float2 a, float2 b, float2 p) {
+    float2 e = b - a;
+    float2 d = p - a;
+    return d.x * e.y - d.y * e.x;
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void compute_main(uint2 tid : SV_DispatchThreadID,
@@ -16,5 +23,12 @@ void compute_main(uint2 tid : SV_DispatchThreadID,
 
     // TODO: HW 2.1
 
-    image[ipixel] = float4(float3(0.0), 1.0);
+    float2 p = float2(ipixel) + 0.5;          // test the pixel CENTER
+    float e01 = edge(sp0, sp1, p);
+    float e12 = edge(sp1, sp2, p);
+    float e20 = edge(sp2, sp0, p);
+
+    // inside = all three the same sign; checking both signs covers clockwise AND counter-clockwise triangles
+    if ((e01 >= 0 && e12 >= 0 && e20 >= 0) || (e01 <= 0 && e12 <= 0 && e20 <= 0))
+        image[ipixel] = float4(color, 1.0);
 }

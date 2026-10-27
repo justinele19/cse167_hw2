@@ -3,7 +3,7 @@ import device
 import buffer
 import window
 import math
-from .. import hw2_scene
+from . import hw2_scene
 import time
 import statistics
 import numpy as np
@@ -11,24 +11,39 @@ import image
 from PIL import Image
 import os
 
+def screen_aabb(sp0, sp1, sp2, width, height):
+    xs = (sp0[0], sp1[0], sp2[0])
+    ys = (sp0[1], sp1[1], sp2[1])
+    aabb_min = (max(math.floor(min(xs)), 0),           # floor the min, never below 0
+                max(math.floor(min(ys)), 0))
+    aabb_max = (min(math.ceil(max(xs)), width - 1),    # ceil the max, never past the last pixel
+                min(math.ceil(max(ys)), height - 1))
+    return aabb_min, aabb_max
+
+# Shared helper
+def matrix_at(static_matrix, keyframes, t):
+    if len(keyframes) == 0:
+        return static_matrix          # not animated: use the transform parsed from the scene
+    return hw2_scene.compose_transformations(interpolate_transformation(keyframes, t))
+
 def hw2_1(args):
-    slang_device = spy.create_device()
+    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_1.slang')
     img = buffer.create_texture_2d(slang_device, args.width, args.height)
 
     a = img.width / img.height
     def to_screen(p):
-        # HW2.1: implement this
-        # access "s" using args.s
-        return (0.0, 0.0)
+        x, y, z = p
+        xp, yp = -x / z, -y / z                                   # Eq. 1: project onto the plane z = -1
+        sx = img.width * (xp + args.s * a) / (2 * args.s * a)     # Eq. 3
+        sy = img.height * (args.s - yp) / (2 * args.s)            # y version: flipped (screen y points down)
+        return (sx, sy)
 
     sp0 = to_screen(args.p0)
     sp1 = to_screen(args.p1)
     sp2 = to_screen(args.p2)
 
-    # HW2.1: implement this
-    aabb_min = (0, 0)
-    aabb_max = (10, 10)
+    aabb_min, aabb_max = screen_aabb(sp0, sp1, sp2, img.width, img.height)
 
     vars = {'sp0': sp0,
             'sp1': sp1,
@@ -44,9 +59,9 @@ def hw2_1(args):
             # the entire triangle is outside the screen
             return
 
-        # Launch the kernel 
+        # Launch the kernel
         compute_shader.kernel.dispatch(
-            thread_count=[aabb_max[0] - aabb_min[0] + 1,
+            thread_count=[aabb_max[0] - aabb_min[0] + 1,      # one thread per pixel in the AABB
                           aabb_max[1] - aabb_min[1] + 1,
                           1],
             command_encoder=command_encoder,
@@ -68,7 +83,7 @@ def hw2_1(args):
         image.save_png(args.output, img.to_numpy())
 
 def hw2_2(args):
-    slang_device = spy.create_device()
+    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_2.slang')
     color_image = buffer.create_texture_2d(slang_device, args.width, args.height, num_channels=4)
     depth_image = buffer.create_texture_2d(slang_device, args.width, args.height, num_channels=1)
@@ -79,7 +94,11 @@ def hw2_2(args):
 
     def to_screen(p):
         # HW2.2: implement this (basically the same as HW2.1)
-        return (0.0, 0.0)
+        x, y, z = (float(v) for v in p)
+        xp, yp = -x / z, -y / z                                       # Eq. 1
+        sx = args.width * (xp + args.s * a) / (2 * args.s * a)        # Eq. 3
+        sy = args.height * (args.s - yp) / (2 * args.s)               # flipped y
+        return (sx, sy)
 
     # splat the triangles onto the screen
     screen_vertices = [to_screen(mesh.vertices[vid, :]) for vid in range(mesh.vertices.shape[0])]
@@ -104,7 +123,18 @@ def hw2_2(args):
             # aabb_min & aabb_max like in 2.1
             # c0, c1, c2 from mesh.vertex_colors
             # use mesh.faces[tri_id] to obtain the vertex indices
-
+            i0, i1, i2 = mesh.faces[tri_id]                           # vertex indices of this triangle
+            sp0 = screen_vertices[i0]
+            sp1 = screen_vertices[i1]
+            sp2 = screen_vertices[i2]
+            inv_depth0 = -1.0 / float(mesh.vertices[i0, 2])           # depth = -z, so 1/depth = -1/z (positive)
+            inv_depth1 = -1.0 / float(mesh.vertices[i1, 2])
+            inv_depth2 = -1.0 / float(mesh.vertices[i2, 2])
+            aabb_min, aabb_max = screen_aabb(sp0, sp1, sp2, args.width, args.height)
+            c0 = tuple(mesh.vertex_colors[i0].tolist())
+            c1 = tuple(mesh.vertex_colors[i1].tolist())
+            c2 = tuple(mesh.vertex_colors[i2].tolist())
+            
             if aabb_min[0] > aabb_max[0] or aabb_min[1] > aabb_max[1]:
                 continue
 
@@ -146,7 +176,7 @@ def hw2_2(args):
         image.save_png(args.output, color_image.to_numpy())
 
 def hw2_3(args):
-    slang_device = spy.create_device()
+    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_2.slang')
     scene = hw2_scene.parse_scene(args.scene)
     camera = scene.camera
@@ -159,11 +189,22 @@ def hw2_3(args):
 
     # HW 2.3: implement this
     # change np.zeros into the right matrices
-    projection = np.zeros((4, 4), dtype=np.float32)
-    camera_to_screen = np.zeros((4, 4), dtype=np.float32)
+    #projection = np.zeros((4, 4), dtype=np.float32)
+    #camera_to_screen = np.zeros((4, 4), dtype=np.float32)
     # use camera.cam_to_world
-    view_matrix = np.zeros((4, 4), dtype=np.float32)
-    world_to_screen = np.zeros((4, 4), dtype=np.float32)
+    #view_matrix = np.zeros((4, 4), dtype=np.float32)
+    #world_to_screen = np.zeros((4, 4), dtype=np.float32)
+
+    projection = np.array([[1, 0, 0, 0],
+                           [0, 1, 0, 0],
+                           [0, 0, 0, 1],
+                           [0, 0, -1, 0]], dtype=np.float32)               # Eq. 29: puts -z into w
+    camera_to_screen = np.array([[width / (2 * camera.s * a), 0, 0, width / 2],
+                                 [0, -height / (2 * camera.s), 0, height / 2],   # minus = y flip
+                                 [0, 0, 1, 0],
+                                 [0, 0, 0, 1]], dtype=np.float32)
+    view_matrix = np.linalg.inv(camera.cam_to_world)                        # world -> camera
+    world_to_screen = camera_to_screen @ projection @ view_matrix
     
     screen_vertices_list = []
     inv_depth_list = []
@@ -171,7 +212,7 @@ def hw2_3(args):
         # HW 2.3: implement this
         # change np.zeros into the right matrix
         # use mesh.model_matrix
-        MVP = np.zeros((4, 4), dtype=np.float32)
+        MVP = world_to_screen @ mesh.model_matrix                           # object -> screen in one matrix
         ones = np.ones((mesh.vertices.shape[0], 1), dtype=mesh.vertices.dtype)
         vertices = np.concatenate(
             [mesh.vertices, ones],
@@ -184,6 +225,8 @@ def hw2_3(args):
         # ---
         # HW 2.3: your code here
         # ---
+        vertices = (MVP @ vertices.T).T
+        vertices = vertices[:, :3] / vertices[:, 3:4]                      # homogeneous divide by w = -z
         inv_depth_list.append(np.ascontiguousarray(vertices[:, 2]))
         screen_vertices_list.append(np.ascontiguousarray(vertices[:, :2]))
 
@@ -208,7 +251,18 @@ def hw2_3(args):
             for tri_id in range(mesh.faces.shape[0]):
                 # HW 2.3: implement this
                 # (basically the same as HW 2.2)
-
+                i0, i1, i2 = mesh.faces[tri_id]
+                sp0 = tuple(screen_vertices[i0].tolist())
+                sp1 = tuple(screen_vertices[i1].tolist())
+                sp2 = tuple(screen_vertices[i2].tolist())
+                inv_depth0 = float(inv_depth[i0])        # already computed by the divide above
+                inv_depth1 = float(inv_depth[i1])
+                inv_depth2 = float(inv_depth[i2])
+                aabb_min, aabb_max = screen_aabb(sp0, sp1, sp2, width, height)
+                c0 = tuple(mesh.vertex_colors[i0].tolist())
+                c1 = tuple(mesh.vertex_colors[i1].tolist())
+                c2 = tuple(mesh.vertex_colors[i2].tolist())
+                
                 if aabb_min[0] > aabb_max[0] or aabb_min[1] > aabb_max[1]:
                     continue
 
@@ -248,6 +302,9 @@ def hw2_3(args):
         slang_device.wait_for_submit(submit_id)
         image.save_png(args.output, color_image.to_numpy())
 
+def lerp(v0, v1, alpha):
+    return [(1 - alpha) * x + alpha * y for x, y in zip(v0, v1)]
+
 def interpolate_transformation(transform_keyframes, t):
     # HW 2.4: implement this
     # Find the two keyframes surrounding t and linearly
@@ -255,12 +312,32 @@ def interpolate_transformation(transform_keyframes, t):
     #
     # Return a list of transformations in the same format
     # as the "transform" field in the scene JSON.
+     # find the pair of keyframes around t (t is already wrapped by render_frame)
+    k0, k1 = transform_keyframes[0], transform_keyframes[-1]
+    for i in range(len(transform_keyframes) - 1):
+        if transform_keyframes[i]['time'] <= t <= transform_keyframes[i + 1]['time']:
+            k0, k1 = transform_keyframes[i], transform_keyframes[i + 1]
+            break
+
+    span = k1['time'] - k0['time']
+    alpha = 0.0 if span == 0 else (t - k0['time']) / span      # 0 at k0, 1 at k1
+    alpha = min(max(alpha, 0.0), 1.0)
+
     interp_transforms = []
+    for tr0, tr1 in zip(k0['transform'], k1['transform']):     # same count, types and order (PDF guarantees it)
+        (kind, v0), = tr0.items()
+        (_, v1), = tr1.items()
+        if kind == 'lookat':
+            value = {key: lerp(v0[key], v1[key], alpha)         # lerp position, target and up separately
+                     for key in ('position', 'target', 'up')}
+        else:
+            value = lerp(v0, v1, alpha)                         # scale, translate, rotate angle
+        interp_transforms.append({kind: value})
 
     return interp_transforms
     
 def hw2_4(args):
-    slang_device = spy.create_device()
+    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_2.slang')
     scene = hw2_scene.parse_scene(args.scene)
     camera = scene.camera
@@ -273,27 +350,38 @@ def hw2_4(args):
 
     # HW 2.4 TODO: implement this (basically the same as 2.3)
     # change np.zeros into the right matrices
-    projection = np.zeros((4, 4), dtype=np.float32)
-    camera_to_screen = np.zeros((4, 4), dtype=np.float32)
+    projection = np.array([[1, 0, 0, 0],
+                           [0, 1, 0, 0],
+                           [0, 0, 0, 1],
+                           [0, 0, -1, 0]], dtype=np.float32)
+    
+    camera_to_screen = np.array([[width / (2 * camera.s * a), 0, 0, width / 2],
+                                 [0, -height / (2 * camera.s), 0, height / 2],
+                                 [0, 0, 1, 0],
+                                 [0, 0, 0, 1]], dtype=np.float32)
 
     def render_frame(command_encoder, t):
         t = t % scene.duration
         # HW 2.4 TODO: insert your code here and fill in world_to_screen
         # by using interpolate_transformation to compute the view matrix at time t
-        world_to_screen = np.zeros((4, 4), dtype=np.float32)
+        # world_to_screen = np.zeros((4, 4), dtype=np.float32)
+        cam_to_world = matrix_at(camera.cam_to_world, camera.transform_keyframes, t)   # camera at time t
+        world_to_screen = camera_to_screen @ projection @ np.linalg.inv(cam_to_world)
         
         screen_vertices_list = []
         inv_depth_list = []
         for mesh in scene.meshes:
             # HW 2.4 TODO: insert your code here and fill in the MVP matrix
             # by using interpolate_transformation to compute the model matrix at time t
-            MVP = np.zeros((4, 4), dtype=np.float32)
+            MVP = world_to_screen @ matrix_at(mesh.model_matrix, mesh.transform_keyframes, t)   # mesh at time t
             ones = np.ones((mesh.vertices.shape[0], 1), dtype=mesh.vertices.dtype)
             vertices = np.concatenate(
                 [mesh.vertices, ones],
                 axis=1
             )
             # HW 2.4 TODO: insert your code here (basically the same as 2.3)
+            vertices = (MVP @ vertices.T).T
+            vertices = vertices[:, :3] / vertices[:, 3:4]                  # homogeneous divide by w = -z
             inv_depth_list.append(np.ascontiguousarray(vertices[:, 2]))
             screen_vertices_list.append(np.ascontiguousarray(vertices[:, :2]))
 
@@ -318,6 +406,17 @@ def hw2_4(args):
             for tri_id in range(mesh.faces.shape[0]):
                 # HW 2.4 TODO: implement this
                 # (basically the same as HW 2.2 & 2.3)
+                i0, i1, i2 = mesh.faces[tri_id]
+                sp0 = tuple(screen_vertices[i0].tolist())
+                sp1 = tuple(screen_vertices[i1].tolist())
+                sp2 = tuple(screen_vertices[i2].tolist())
+                inv_depth0 = float(inv_depth[i0])
+                inv_depth1 = float(inv_depth[i1])
+                inv_depth2 = float(inv_depth[i2])
+                aabb_min, aabb_max = screen_aabb(sp0, sp1, sp2, width, height)
+                c0 = tuple(mesh.vertex_colors[i0].tolist())
+                c1 = tuple(mesh.vertex_colors[i1].tolist())
+                c2 = tuple(mesh.vertex_colors[i2].tolist())
 
                 if aabb_min[0] > aabb_max[0] or aabb_min[1] > aabb_max[1]:
                     continue
@@ -368,7 +467,7 @@ def hw2_4(args):
         image.save_png(args.output, color_image.to_numpy())
 
 def hw2_5(args):
-    slang_device = spy.create_device()
+    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
     transform_vertices_shader = \
         device.load_compute_shader(slang_device,
             'hw2/hw2_5.slang', 'transform_vertices')
@@ -537,7 +636,7 @@ def hw2_5(args):
         image.save_png(args.output, color_image.to_numpy())
 
 def hw2_6(args):
-    slang_device = spy.create_device()
+    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
     program = slang_device.load_program(
         "hw2/hw2_6.slang",
         ["vertex_main", "fragment_main"]
@@ -712,7 +811,7 @@ def create_Kd_texture(slang_device, material, scene_dir):
     )
 
 def hw2_7(args):
-    slang_device = spy.create_device()
+    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
     program = slang_device.load_program(
         "hw2/hw2_7.slang",
         ["vertex_main", "fragment_main"]

@@ -180,6 +180,21 @@ def parse_triangle_mesh(filename: str) -> TriangleMesh:
         transform_keyframes=[],
         material={})
 
+def normalize(v):
+    return v / np.linalg.norm(v)
+
+def lookat(position, target, up):
+    p, t, u = (np.asarray(x, dtype=np.float32) for x in (position, target, up))
+    d = normalize(t - p)              # Eq. 23: where the camera faces
+    r = normalize(np.cross(d, u))     # Eq. 24: right vector
+    u2 = np.cross(r, d)               # Eq. 25: re-derived up, now exactly perpendicular
+    L = np.eye(4, dtype=np.float32)
+    L[:3, 0] = r                      # Eq. 26: columns are the new x, y, -z axes...
+    L[:3, 1] = u2
+    L[:3, 2] = -d
+    L[:3, 3] = p                      # ...plus the position
+    return L
+
 def compose_transformations(transformations):
     """
         Given a list of transformations, compose them into a matrix.
@@ -187,9 +202,25 @@ def compose_transformations(transformations):
     F = np.eye(4, dtype=np.float32)
 
     for transform in transformations:
-        pass
         # HW 2.3 TODO: your code here
-
+        (kind, value), = transform.items()     # each entry is a one-key dict, e.g. {"rotate_x": [10]}
+        T = np.eye(4, dtype=np.float32)
+        if kind == 'scale':
+            T[0, 0], T[1, 1], T[2, 2] = value
+        elif kind == 'translate':
+            T[:3, 3] = value
+        elif kind in ('rotate_x', 'rotate_y', 'rotate_z'):
+            th = math.radians(value[0])        # JSON gives degrees
+            c, s = math.cos(th), math.sin(th)
+            if kind == 'rotate_x':
+                T[1, 1], T[1, 2], T[2, 1], T[2, 2] = c, -s, s, c
+            elif kind == 'rotate_y':
+                T[0, 0], T[0, 2], T[2, 0], T[2, 2] = c, s, -s, c   # sign pattern differs from x and z (Eq. 21)
+            else:
+                T[0, 0], T[0, 1], T[1, 0], T[1, 1] = c, -s, s, c
+        elif kind == 'lookat':
+            T = lookat(value['position'], value['target'], value['up'])
+        F = T @ F                              # later transform goes on the LEFT
     return F
 
 def parse_scene(filename : str) -> Scene:
