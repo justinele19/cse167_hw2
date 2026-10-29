@@ -20,7 +20,12 @@ def screen_aabb(sp0, sp1, sp2, width, height):
                 min(math.ceil(max(ys)), height - 1))
     return aabb_min, aabb_max
 
-# Shared helper
+# Shared helper (written in 2.4, reused by 2.5, 2.6, 2.7)
+# Returns an object's (or the camera's) 4x4 transform at time t:
+#  - no keyframes -> the fixed matrix parsed from the scene's "transform"
+#  - keyframes    -> blend the two surrounding keyframes' parameters
+#                    (interpolate_transformation), then build the matrix
+#                    (compose_transformations)
 def matrix_at(static_matrix, keyframes, t):
     if len(keyframes) == 0:
         return static_matrix          # not animated: use the transform parsed from the scene
@@ -467,6 +472,10 @@ def hw2_4(args):
         image.save_png(args.output, color_image.to_numpy())
 
 def hw2_5(args):
+    # HW 2.5 overview: the CPU (this Python) only computes one MVP matrix per mesh
+    # and launches 5 GPU kernels per frame (see hw2_5.slang for each kernel):
+    #   transform_vertices -> clear_buffers -> rasterize_depth -> rasterize_id -> shade
+    # Each kernel is launched ONCE with many threads, instead of once per triangle.
     slang_device = spy.create_device(type=spy.DeviceType.metal)
     transform_vertices_shader = \
         device.load_compute_shader(slang_device,
@@ -492,6 +501,9 @@ def hw2_5(args):
 
     # Preprocessing: merge all meshes into one list
     # so that we can launch them on GPU
+    # (One big vertex array + one big face array means ONE rasterize launch covers
+    #  every triangle in the scene. Face indices get shifted by vertex_offset so
+    #  they still point at the right vertices in the merged array.)
     vertices_list = []
     faces_list = []
     colors_list = []
@@ -529,19 +541,28 @@ def hw2_5(args):
 
     # HW 2.5 TODO: implement this (basically the same as 2.3 and 2.4)
     # change np.zeros into the right matrices
+    # Perspective projection (Eq. 29). Applied to camera-space (x, y, z, 1) it gives
+    # (x, y, 1, -z). After dividing by w = -z (the depth):
+    #   x/-z, y/-z = point projected onto the image plane z = -1
+    #   1/-z       = inverse depth, which the rasterizer needs for perspective-correct weights
     projection = np.array([[1, 0, 0, 0],
                            [0, 1, 0, 0],
                            [0, 0, 0, 1],
                            [0, 0, -1, 0]], dtype=np.float32)               # z/w becomes 1/depth
+    # Image plane -> pixel coordinates (Eq. 3): x in [-s*a, s*a] maps to [0, width],
+    # y in [-s, s] maps to [height, 0] (minus sign = flip, since pixel y points DOWN).
+    # The z row is identity so the inverse depth passes through untouched.
     camera_to_screen = np.array([[width / (2 * camera.s * a), 0, 0, width / 2],
                                  [0, -height / (2 * camera.s), 0, height / 2],
                                  [0, 0, 1, 0],
                                  [0, 0, 0, 1]], dtype=np.float32)
 
     def render_frame(command_encoder, t):
-        t = t % scene.duration
+        t = t % scene.duration                      # loop the animation
         # HW 2.5 TODO: implement this (basically the same as 2.4)
         cam_to_world = matrix_at(camera.cam_to_world, camera.transform_keyframes, t)   # camera at time t
+        # view matrix = inverse of cam_to_world (world -> camera space).
+        # Matrices apply right-to-left: world -> camera -> projected -> pixels.
         world_to_screen = camera_to_screen @ projection @ np.linalg.inv(cam_to_world)
 
         command_encoder.clear_texture_float(
@@ -556,8 +577,10 @@ def hw2_5(args):
         # has a different model matrix
         for mesh, offset in zip(scene.meshes, vertex_offsets):
             # HW 2.5 TODO: implement this (basically the same as 2.4)
+            # MVP = object -> world (model) -> pixels, all in one matrix
             MVP = world_to_screen @ matrix_at(mesh.model_matrix, mesh.transform_keyframes, t)   # mesh at time t
-            MVP = np.asarray(MVP, dtype=np.float32)
+            MVP = np.asarray(MVP, dtype=np.float32)     # GPU expects 32-bit floats
+            # Step 1: one GPU thread per vertex of THIS mesh applies MVP + divide by w
             transform_vertices_shader.kernel.dispatch(\
                 thread_count=[mesh.vertices.shape[0], 1, 1],
                 command_encoder=command_encoder,
@@ -568,6 +591,7 @@ def hw2_5(args):
                 projected_vertices=projected_vertices.storage
             )
 
+        # Step 2: one thread per pixel resets depth/ID buffers to 0xffffffff
         clear_buffers_shader.kernel.dispatch(
             thread_count=[width * height, 1, 1],
             command_encoder=command_encoder,
@@ -575,8 +599,11 @@ def hw2_5(args):
             depth_buffer=depth_buffer.storage,
             triangle_id_buffer=triangle_id_buffer.storage)
 
+        # Barrier = "wait until everything above has finished" before the next step
+        # (the rasterizer must see fully projected vertices and cleared buffers)
         command_encoder.global_barrier()
 
+        # Step 3: one thread per triangle -> closest depth per pixel
         rasterize_depth_shader.kernel.dispatch(\
             thread_count=[num_faces, 1, 1],
             command_encoder=command_encoder,
@@ -590,8 +617,10 @@ def hw2_5(args):
             depth_buffer=depth_buffer.storage
         )
 
+        # depth_buffer must be FINAL before the ID pass compares against it
         command_encoder.global_barrier()
 
+        # Step 4: one thread per triangle -> which triangle is visible per pixel
         rasterize_id_shader.kernel.dispatch(\
             thread_count=[num_faces, 1, 1],
             command_encoder=command_encoder,
@@ -608,6 +637,7 @@ def hw2_5(args):
 
         command_encoder.global_barrier()
 
+        # Step 5: one thread per pixel -> color from the visible triangle
         shade_shader.kernel.dispatch(\
             thread_count=[width, height, 1],
             command_encoder=command_encoder,
@@ -644,6 +674,11 @@ def hw2_5(args):
         image.save_png(args.output, color_image.to_numpy())
 
 def hw2_6(args):
+    # HW 2.6 overview: use the GPU's built-in graphics pipeline instead of our own
+    # rasterizer. Python sets up the pipeline (depth test, index buffers) and, each
+    # frame, gives every mesh its MVP and calls draw_indexed. The GPU runs
+    # vertex_main / fragment_main from hw2_6.slang and does clipping, rasterization,
+    # interpolation, and depth testing itself.
     slang_device = spy.create_device(type=spy.DeviceType.metal)
     program = slang_device.load_program(
         "hw2/hw2_6.slang",
@@ -738,6 +773,10 @@ def hw2_6(args):
         }),
     })
 
+    # (Provided) Projection to CLIP space instead of screen space. After the GPU
+    # divides by w = -z: x, y land in [-1, 1] (visible area), depth lands in [0, 1]
+    # (0 at the near plane, 1 infinitely far). The GPU then maps [-1, 1] to pixels
+    # itself, so there is no camera_to_screen matrix in 2.6/2.7.
     clip_projection = np.array([
         [1 / (camera.s * a), 0, 0, 0],
         [0, 1 / camera.s, 0, 0],
@@ -746,10 +785,12 @@ def hw2_6(args):
     ], dtype=np.float32)
 
     def render_frame(command_encoder, t):
-        t = t % scene.duration
+        t = t % scene.duration                      # loop the animation
         # HW 2.6 TODO: compute the view matrix
         # remember to handle animation if keyframes exist
         cam_to_world = matrix_at(camera.cam_to_world, camera.transform_keyframes, t)   # camera at time t
+        # cam_to_world places the camera in the world; its inverse (the view matrix)
+        # moves the world so the camera sits at the origin looking down -z.
         view_matrix = np.linalg.inv(cam_to_world)                                      # world -> camera
 
         render_pass = command_encoder.begin_render_pass(render_pass_desc)
@@ -757,10 +798,11 @@ def hw2_6(args):
         for mesh, gpu_mesh in zip(scene.meshes, gpu_meshes):
             # HW 2.6 TODO: compute the model matrix
             # remember to handle animation if keyframes exist
-            model_matrix = matrix_at(mesh.model_matrix, mesh.transform_keyframes, t)   # mesh at time t
+            model_matrix = matrix_at(mesh.model_matrix, mesh.transform_keyframes, t)   # mesh at time t (object -> world)
 
+            # object -> world -> camera -> clip (applied right to left)
             MVP = clip_projection @ view_matrix @ model_matrix
-            MVP = np.asarray(MVP, dtype=np.float32)
+            MVP = np.asarray(MVP, dtype=np.float32)     # GPU expects 32-bit floats
 
             root = render_pass.bind_pipeline(pipeline)
             cursor = spy.ShaderCursor(root)
@@ -821,6 +863,9 @@ def create_Kd_texture(slang_device, material, scene_dir):
     )
 
 def hw2_7(args):
+    # HW 2.7 overview: same GPU pipeline as 2.6, but each mesh also gets normals,
+    # UVs, a Kd texture, and material/light values, and hw2_7.slang computes
+    # Phong lighting (ambient + diffuse + specular) per pixel.
     slang_device = spy.create_device(type=spy.DeviceType.metal)
     program = slang_device.load_program(
         "hw2/hw2_7.slang",
@@ -941,6 +986,8 @@ def hw2_7(args):
         t = t % scene.duration
         # HW 2.7 TODO: compute cam_to_world and view matrix
         # remember to handle animation if keyframes exist
+        # Same as 2.6. cam_to_world matters more here: its last column [:3, 3] is
+        # the camera's world position, sent below as camera_position for specular.
         cam_to_world = matrix_at(camera.cam_to_world, camera.transform_keyframes, t)   # camera at time t
         view_matrix = np.linalg.inv(cam_to_world)                                      # world -> camera
 
@@ -951,10 +998,14 @@ def hw2_7(args):
             # remember to handle animation if keyframes exist
             model_matrix = matrix_at(mesh.model_matrix, mesh.transform_keyframes, t)   # mesh at time t
             model_matrix = np.asarray(model_matrix, dtype=np.float32)                  # also sent to the GPU
+            # (the vertex shader uses model_matrix to get world positions for lighting)
 
+            # (Provided) Normal matrix N = (M3x3^-1)^T: transforms normals so they stay
+            # perpendicular to the surface even under non-uniform scaling.
             normal_matrix = np.linalg.inv(model_matrix[:3, :3]).T
             normal_matrix = np.asarray(normal_matrix, dtype=np.float32)
 
+            # object -> world -> camera -> clip (applied right to left)
             MVP = clip_projection @ view_matrix @ model_matrix
             MVP = np.asarray(MVP, dtype=np.float32)
 
