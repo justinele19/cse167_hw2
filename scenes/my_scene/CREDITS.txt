@@ -1,0 +1,9 @@
+Spaceship model: "craft_speederD" from Space Kit (2.0) by Kenney (www.kenney.nl)
+  Source:  https://kenney.nl/assets/space-kit
+  License: Creative Commons Zero (CC0) - http://creativecommons.org/publicdomain/zero/1.0/
+  Changes: converted from OBJ to PLY with trimesh, split into one PLY per material
+           (ship_metal, ship_metalDark, ship_dark, ship_metalRed), centered and
+           scaled to 1.6 units wide, flat-shaded normals. Material colors (Kd) taken
+           from the original .mtl file.
+
+Moon: moon_sphere.json is a copy of uv_sphere.json provided with the CSE 167 HW2 starter code.
