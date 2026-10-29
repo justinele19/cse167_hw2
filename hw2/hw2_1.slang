@@ -1,4 +1,5 @@
 // Eq. 4: E(p) = (p - a) . n, where n = (e.y, -e.x) and e = b - a
+// The sign says which side of the line a->b the point p is on (0 = exactly on the line)
 float edge(float2 a, float2 b, float2 p) {
     float2 e = b - a;
     float2 d = p - a;
@@ -23,7 +24,9 @@ void compute_main(uint2 tid : SV_DispatchThreadID,
 
     // TODO: HW 2.1
 
+    // each thread handles one pixel in the AABB (ipixel is computed above)
     float2 p = float2(ipixel) + 0.5;          // test the pixel CENTER
+    // which side of each of the 3 edges is p on?
     float e01 = edge(sp0, sp1, p);
     float e12 = edge(sp1, sp2, p);
     float e20 = edge(sp2, sp0, p);

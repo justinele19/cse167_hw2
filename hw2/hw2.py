@@ -11,6 +11,9 @@ import image
 from PIL import Image
 import os
 
+# Pixel bounding box of a screen-space triangle, clamped to the image.
+# Only pixels inside this box get a GPU thread, so we don't test the whole screen.
+# If the triangle is fully off-screen, min ends up > max (callers check for that).
 def screen_aabb(sp0, sp1, sp2, width, height):
     xs = (sp0[0], sp1[0], sp2[0])
     ys = (sp0[1], sp1[1], sp2[1])
@@ -36,7 +39,9 @@ def hw2_1(args):
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_1.slang')
     img = buffer.create_texture_2d(slang_device, args.width, args.height)
 
-    a = img.width / img.height
+    a = img.width / img.height                                    # aspect ratio
+    # camera-space point -> pixel coordinates.
+    # The visible image plane spans x in [-s*a, s*a] and y in [-s, s]; we remap that to [0, width] x [0, height].
     def to_screen(p):
         x, y, z = p
         xp, yp = -x / z, -y / z                                   # Eq. 1: project onto the plane z = -1
@@ -48,6 +53,7 @@ def hw2_1(args):
     sp1 = to_screen(args.p1)
     sp2 = to_screen(args.p2)
 
+    # only launch threads for pixels the triangle could cover
     aabb_min, aabb_max = screen_aabb(sp0, sp1, sp2, img.width, img.height)
 
     vars = {'sp0': sp0,
@@ -99,7 +105,7 @@ def hw2_2(args):
 
     def to_screen(p):
         # HW2.2: implement this (basically the same as HW2.1)
-        x, y, z = (float(v) for v in p)
+        x, y, z = (float(v) for v in p)                               # numpy row -> plain floats
         xp, yp = -x / z, -y / z                                       # Eq. 1
         sx = args.width * (xp + args.s * a) / (2 * args.s * a)        # Eq. 3
         sy = args.height * (args.s - yp) / (2 * args.s)               # flipped y
@@ -129,17 +135,23 @@ def hw2_2(args):
             # c0, c1, c2 from mesh.vertex_colors
             # use mesh.faces[tri_id] to obtain the vertex indices
             i0, i1, i2 = mesh.faces[tri_id]                           # vertex indices of this triangle
+          
+            # screen positions were already computed for every vertex above
             sp0 = screen_vertices[i0]
             sp1 = screen_vertices[i1]
             sp2 = screen_vertices[i2]
+            
+            # the shader needs 1/depth per vertex for perspective-correct interpolation
             inv_depth0 = -1.0 / float(mesh.vertices[i0, 2])           # depth = -z, so 1/depth = -1/z (positive)
             inv_depth1 = -1.0 / float(mesh.vertices[i1, 2])
             inv_depth2 = -1.0 / float(mesh.vertices[i2, 2])
             aabb_min, aabb_max = screen_aabb(sp0, sp1, sp2, args.width, args.height)
+            # per-vertex RGB; tuple() so slangpy can pass it as a float3
             c0 = tuple(mesh.vertex_colors[i0].tolist())
             c1 = tuple(mesh.vertex_colors[i1].tolist())
             c2 = tuple(mesh.vertex_colors[i2].tolist())
-            
+
+            # triangle is entirely off-screen: nothing to draw
             if aabb_min[0] > aabb_max[0] or aabb_min[1] > aabb_max[1]:
                 continue
 
@@ -200,15 +212,20 @@ def hw2_3(args):
     #view_matrix = np.zeros((4, 4), dtype=np.float32)
     #world_to_screen = np.zeros((4, 4), dtype=np.float32)
 
+    # Perspective projection: (x, y, z, 1) -> (x, y, 1, -z).
+    # After dividing by w = -z this gives (x/-z, y/-z, 1/-z): Eq. 1, plus 1/depth stored in z.
     projection = np.array([[1, 0, 0, 0],
                            [0, 1, 0, 0],
                            [0, 0, 0, 1],
                            [0, 0, -1, 0]], dtype=np.float32)               # Eq. 29: puts -z into w
+    # Image plane -> pixels: same as Eq. 3 in to_screen, written as scale + offset.
+    # The z row is identity so the 1/depth value passes through untouched.
     camera_to_screen = np.array([[width / (2 * camera.s * a), 0, 0, width / 2],
                                  [0, -height / (2 * camera.s), 0, height / 2],   # minus = y flip
                                  [0, 0, 1, 0],
                                  [0, 0, 0, 1]], dtype=np.float32)
     view_matrix = np.linalg.inv(camera.cam_to_world)                        # world -> camera
+    # Read right to left: world -> camera -> projected -> pixels
     world_to_screen = camera_to_screen @ projection @ view_matrix
     
     screen_vertices_list = []
@@ -230,8 +247,11 @@ def hw2_3(args):
         # ---
         # HW 2.3: your code here
         # ---
+        # vertices is N x 4 (one row per vertex), but MVP multiplies column vectors,
+        # so transpose to 4 x N, multiply, and transpose back
         vertices = (MVP @ vertices.T).T
         vertices = vertices[:, :3] / vertices[:, 3:4]                      # homogeneous divide by w = -z
+        # now each row is (screen_x, screen_y, 1/depth)
         inv_depth_list.append(np.ascontiguousarray(vertices[:, 2]))
         screen_vertices_list.append(np.ascontiguousarray(vertices[:, :2]))
 
@@ -256,8 +276,9 @@ def hw2_3(args):
             for tri_id in range(mesh.faces.shape[0]):
                 # HW 2.3: implement this
                 # (basically the same as HW 2.2)
+                # same as 2.2, except screen position and 1/depth come from the MVP pass above
                 i0, i1, i2 = mesh.faces[tri_id]
-                sp0 = tuple(screen_vertices[i0].tolist())
+                sp0 = tuple(screen_vertices[i0].tolist())                # numpy row -> (x, y) tuple
                 sp1 = tuple(screen_vertices[i1].tolist())
                 sp2 = tuple(screen_vertices[i2].tolist())
                 inv_depth0 = float(inv_depth[i0])        # already computed by the divide above
@@ -307,6 +328,7 @@ def hw2_3(args):
         slang_device.wait_for_submit(submit_id)
         image.save_png(args.output, color_image.to_numpy())
 
+# Linear interpolation, element by element: alpha = 0 gives v0, alpha = 1 gives v1
 def lerp(v0, v1, alpha):
     return [(1 - alpha) * x + alpha * y for x, y in zip(v0, v1)]
 
@@ -317,20 +339,22 @@ def interpolate_transformation(transform_keyframes, t):
     #
     # Return a list of transformations in the same format
     # as the "transform" field in the scene JSON.
-     # find the pair of keyframes around t (t is already wrapped by render_frame)
-    k0, k1 = transform_keyframes[0], transform_keyframes[-1]
+    # find the pair of keyframes around t (t is already wrapped by render_frame)
+    k0, k1 = transform_keyframes[0], transform_keyframes[-1]    # fallback if t is outside every pair
     for i in range(len(transform_keyframes) - 1):
         if transform_keyframes[i]['time'] <= t <= transform_keyframes[i + 1]['time']:
             k0, k1 = transform_keyframes[i], transform_keyframes[i + 1]
             break
 
+    # how far t is between the two keyframes, as a fraction
     span = k1['time'] - k0['time']
     alpha = 0.0 if span == 0 else (t - k0['time']) / span      # 0 at k0, 1 at k1
-    alpha = min(max(alpha, 0.0), 1.0)
+    alpha = min(max(alpha, 0.0), 1.0)                          # clamp in case t fell outside the pair
 
+    # interpolate each transform's numbers, keeping the same list structure as the JSON
     interp_transforms = []
     for tr0, tr1 in zip(k0['transform'], k1['transform']):     # same count, types and order (PDF guarantees it)
-        (kind, v0), = tr0.items()
+        (kind, v0), = tr0.items()                              # unpack the one-key dict, e.g. {"translate": [x, y, z]}
         (_, v1), = tr1.items()
         if kind == 'lookat':
             value = {key: lerp(v0[key], v1[key], alpha)         # lerp position, target and up separately
@@ -355,6 +379,7 @@ def hw2_4(args):
 
     # HW 2.4 TODO: implement this (basically the same as 2.3)
     # change np.zeros into the right matrices
+    # these two don't depend on time, so build them once outside render_frame
     projection = np.array([[1, 0, 0, 0],
                            [0, 1, 0, 0],
                            [0, 0, 0, 1],
@@ -371,8 +396,9 @@ def hw2_4(args):
         # by using interpolate_transformation to compute the view matrix at time t
         # world_to_screen = np.zeros((4, 4), dtype=np.float32)
         cam_to_world = matrix_at(camera.cam_to_world, camera.transform_keyframes, t)   # camera at time t
-        world_to_screen = camera_to_screen @ projection @ np.linalg.inv(cam_to_world)
-        
+        world_to_screen = camera_to_screen @ projection @ np.linalg.inv(cam_to_world)  # inv = view matrix
+
+        # same vertex transform as 2.3, but redone every frame since things move
         screen_vertices_list = []
         inv_depth_list = []
         for mesh in scene.meshes:
@@ -385,8 +411,9 @@ def hw2_4(args):
                 axis=1
             )
             # HW 2.4 TODO: insert your code here (basically the same as 2.3)
-            vertices = (MVP @ vertices.T).T
+            vertices = (MVP @ vertices.T).T                                # transpose: rows -> columns and back
             vertices = vertices[:, :3] / vertices[:, 3:4]                  # homogeneous divide by w = -z
+            # each row is now (screen_x, screen_y, 1/depth)
             inv_depth_list.append(np.ascontiguousarray(vertices[:, 2]))
             screen_vertices_list.append(np.ascontiguousarray(vertices[:, :2]))
 
@@ -411,6 +438,7 @@ def hw2_4(args):
             for tri_id in range(mesh.faces.shape[0]):
                 # HW 2.4 TODO: implement this
                 # (basically the same as HW 2.2 & 2.3)
+                # identical to 2.3: gather this triangle's 3 vertices and send them to the shader
                 i0, i1, i2 = mesh.faces[tri_id]
                 sp0 = tuple(screen_vertices[i0].tolist())
                 sp1 = tuple(screen_vertices[i1].tolist())
