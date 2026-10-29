@@ -183,8 +183,10 @@ def parse_triangle_mesh(filename: str) -> TriangleMesh:
 def normalize(v):
     return v / np.linalg.norm(v)
 
+# Builds a camera-to-world matrix for a camera at `position` looking at `target`.
+# The camera looks down its own -z axis, so -z is mapped onto the viewing direction.
 def lookat(position, target, up):
-    p, t, u = (np.asarray(x, dtype=np.float32) for x in (position, target, up))
+    p, t, u = (np.asarray(x, dtype=np.float32) for x in (position, target, up))   # lists from JSON -> numpy
     d = normalize(t - p)              # Eq. 23: where the camera faces
     r = normalize(np.cross(d, u))     # Eq. 24: right vector
     u2 = np.cross(r, d)               # Eq. 25: re-derived up, now exactly perpendicular
@@ -204,12 +206,13 @@ def compose_transformations(transformations):
     for transform in transformations:
         # HW 2.3 TODO: your code here
         (kind, value), = transform.items()     # each entry is a one-key dict, e.g. {"rotate_x": [10]}
-        T = np.eye(4, dtype=np.float32)
+        T = np.eye(4, dtype=np.float32)        # start from identity, then fill in this transform's entries
         if kind == 'scale':
-            T[0, 0], T[1, 1], T[2, 2] = value
+            T[0, 0], T[1, 1], T[2, 2] = value  # scale factors on the diagonal
         elif kind == 'translate':
-            T[:3, 3] = value
+            T[:3, 3] = value                   # offset goes in the last column
         elif kind in ('rotate_x', 'rotate_y', 'rotate_z'):
+            # rotation only touches the 2x2 block of the two axes that move; the rotation axis stays fixed
             th = math.radians(value[0])        # JSON gives degrees
             c, s = math.cos(th), math.sin(th)
             if kind == 'rotate_x':
@@ -220,7 +223,7 @@ def compose_transformations(transformations):
                 T[0, 0], T[0, 1], T[1, 0], T[1, 1] = c, -s, s, c
         elif kind == 'lookat':
             T = lookat(value['position'], value['target'], value['up'])
-        F = T @ F                              # later transform goes on the LEFT
+        F = T @ F                              # later transform goes on the LEFT, so list order = order applied to a point
     return F
 
 def parse_scene(filename : str) -> Scene:
