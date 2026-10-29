@@ -1,0 +1,335 @@
+{
+  "duration": 8.0,
+  "camera": {
+    "resolution": [
+      1024,
+      768
+    ],
+    "s": 0.4,
+    "z_near": 0.001,
+    "transform": [
+      {
+        "lookat": {
+          "position": [
+            0,
+            0.8,
+            3.0
+          ],
+          "target": [
+            0,
+            0,
+            0
+          ],
+          "up": [
+            0,
+            1,
+            0
+          ]
+        }
+      }
+    ]
+  },
+  "light": {
+    "light_dir": [
+      1.0,
+      0.6,
+      0.3
+    ],
+    "light_color": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "background": [
+    0.02,
+    0.02,
+    0.05
+  ],
+  "objects": [
+    {
+      "filename": "ship_metal.ply",
+      "transform_keyframes": [
+        {
+          "time": 0.0,
+          "transform": [
+            {
+              "rotate_y": [
+                0.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        },
+        {
+          "time": 4.0,
+          "transform": [
+            {
+              "rotate_y": [
+                180.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        },
+        {
+          "time": 8.0,
+          "transform": [
+            {
+              "rotate_y": [
+                360.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        }
+      ],
+      "material": {
+        "Kd": [
+          0.8431,
+          0.8706,
+          0.9098
+        ],
+        "Ks": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "exponent": 64.0
+      }
+    },
+    {
+      "filename": "ship_metalDark.ply",
+      "transform_keyframes": [
+        {
+          "time": 0.0,
+          "transform": [
+            {
+              "rotate_y": [
+                0.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        },
+        {
+          "time": 4.0,
+          "transform": [
+            {
+              "rotate_y": [
+                180.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        },
+        {
+          "time": 8.0,
+          "transform": [
+            {
+              "rotate_y": [
+                360.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        }
+      ],
+      "material": {
+        "Kd": [
+          0.6745,
+          0.7098,
+          0.7725
+        ],
+        "Ks": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "exponent": 64.0
+      }
+    },
+    {
+      "filename": "ship_dark.ply",
+      "transform_keyframes": [
+        {
+          "time": 0.0,
+          "transform": [
+            {
+              "rotate_y": [
+                0.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        },
+        {
+          "time": 4.0,
+          "transform": [
+            {
+              "rotate_y": [
+                180.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        },
+        {
+          "time": 8.0,
+          "transform": [
+            {
+              "rotate_y": [
+                360.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        }
+      ],
+      "material": {
+        "Kd": [
+          0.2745,
+          0.298,
+          0.3412
+        ],
+        "Ks": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "exponent": 64.0
+      }
+    },
+    {
+      "filename": "ship_metalRed.ply",
+      "transform_keyframes": [
+        {
+          "time": 0.0,
+          "transform": [
+            {
+              "rotate_y": [
+                0.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        },
+        {
+          "time": 4.0,
+          "transform": [
+            {
+              "rotate_y": [
+                180.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        },
+        {
+          "time": 8.0,
+          "transform": [
+            {
+              "rotate_y": [
+                360.0
+              ]
+            },
+            {
+              "rotate_x": [
+                15.0
+              ]
+            }
+          ]
+        }
+      ],
+      "material": {
+        "Kd": [
+          1.0,
+          0.6275,
+          0.2039
+        ],
+        "Ks": [
+          0.6,
+          0.6,
+          0.6
+        ],
+        "exponent": 64.0
+      }
+    },
+    {
+      "filename": "moon_sphere.json",
+      "transform": [
+        {
+          "scale": [
+            0.6,
+            0.6,
+            0.6
+          ]
+        },
+        {
+          "translate": [
+            -1.8,
+            0.6,
+            -3.0
+          ]
+        }
+      ],
+      "material": {
+        "Kd": [
+          0.6,
+          0.6,
+          0.62
+        ],
+        "Ks": [
+          0.05,
+          0.05,
+          0.05
+        ],
+        "exponent": 8.0
+      }
+    }
+  ]
+}

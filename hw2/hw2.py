@@ -27,7 +27,7 @@ def matrix_at(static_matrix, keyframes, t):
     return hw2_scene.compose_transformations(interpolate_transformation(keyframes, t))
 
 def hw2_1(args):
-    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
+    slang_device = spy.create_device(type=spy.DeviceType.metal)
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_1.slang')
     img = buffer.create_texture_2d(slang_device, args.width, args.height)
 
@@ -83,7 +83,7 @@ def hw2_1(args):
         image.save_png(args.output, img.to_numpy())
 
 def hw2_2(args):
-    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
+    slang_device = spy.create_device(type=spy.DeviceType.metal)
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_2.slang')
     color_image = buffer.create_texture_2d(slang_device, args.width, args.height, num_channels=4)
     depth_image = buffer.create_texture_2d(slang_device, args.width, args.height, num_channels=1)
@@ -176,7 +176,7 @@ def hw2_2(args):
         image.save_png(args.output, color_image.to_numpy())
 
 def hw2_3(args):
-    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
+    slang_device = spy.create_device(type=spy.DeviceType.metal)
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_2.slang')
     scene = hw2_scene.parse_scene(args.scene)
     camera = scene.camera
@@ -337,7 +337,7 @@ def interpolate_transformation(transform_keyframes, t):
     return interp_transforms
     
 def hw2_4(args):
-    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
+    slang_device = spy.create_device(type=spy.DeviceType.metal)
     compute_shader = device.load_compute_shader(slang_device, 'hw2/hw2_2.slang')
     scene = hw2_scene.parse_scene(args.scene)
     camera = scene.camera
@@ -467,7 +467,7 @@ def hw2_4(args):
         image.save_png(args.output, color_image.to_numpy())
 
 def hw2_5(args):
-    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
+    slang_device = spy.create_device(type=spy.DeviceType.metal)
     transform_vertices_shader = \
         device.load_compute_shader(slang_device,
             'hw2/hw2_5.slang', 'transform_vertices')
@@ -529,13 +529,20 @@ def hw2_5(args):
 
     # HW 2.5 TODO: implement this (basically the same as 2.3 and 2.4)
     # change np.zeros into the right matrices
-    projection = np.zeros((4, 4), dtype=np.float32)
-    camera_to_screen = np.zeros((4, 4), dtype=np.float32)
+    projection = np.array([[1, 0, 0, 0],
+                           [0, 1, 0, 0],
+                           [0, 0, 0, 1],
+                           [0, 0, -1, 0]], dtype=np.float32)               # z/w becomes 1/depth
+    camera_to_screen = np.array([[width / (2 * camera.s * a), 0, 0, width / 2],
+                                 [0, -height / (2 * camera.s), 0, height / 2],
+                                 [0, 0, 1, 0],
+                                 [0, 0, 0, 1]], dtype=np.float32)
 
     def render_frame(command_encoder, t):
         t = t % scene.duration
         # HW 2.5 TODO: implement this (basically the same as 2.4)
-        world_to_screen = np.zeros((4, 4), dtype=np.float32)
+        cam_to_world = matrix_at(camera.cam_to_world, camera.transform_keyframes, t)   # camera at time t
+        world_to_screen = camera_to_screen @ projection @ np.linalg.inv(cam_to_world)
 
         command_encoder.clear_texture_float(
             color_image,
@@ -549,7 +556,8 @@ def hw2_5(args):
         # has a different model matrix
         for mesh, offset in zip(scene.meshes, vertex_offsets):
             # HW 2.5 TODO: implement this (basically the same as 2.4)
-            MVP = np.zeros((4, 4), dtype=np.float32)
+            MVP = world_to_screen @ matrix_at(mesh.model_matrix, mesh.transform_keyframes, t)   # mesh at time t
+            MVP = np.asarray(MVP, dtype=np.float32)
             transform_vertices_shader.kernel.dispatch(\
                 thread_count=[mesh.vertices.shape[0], 1, 1],
                 command_encoder=command_encoder,
@@ -636,7 +644,7 @@ def hw2_5(args):
         image.save_png(args.output, color_image.to_numpy())
 
 def hw2_6(args):
-    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
+    slang_device = spy.create_device(type=spy.DeviceType.metal)
     program = slang_device.load_program(
         "hw2/hw2_6.slang",
         ["vertex_main", "fragment_main"]
@@ -741,16 +749,18 @@ def hw2_6(args):
         t = t % scene.duration
         # HW 2.6 TODO: compute the view matrix
         # remember to handle animation if keyframes exist
-        view_matrix = np.zeros((4, 4), dtype=np.float32)
+        cam_to_world = matrix_at(camera.cam_to_world, camera.transform_keyframes, t)   # camera at time t
+        view_matrix = np.linalg.inv(cam_to_world)                                      # world -> camera
 
         render_pass = command_encoder.begin_render_pass(render_pass_desc)
 
         for mesh, gpu_mesh in zip(scene.meshes, gpu_meshes):
             # HW 2.6 TODO: compute the model matrix
             # remember to handle animation if keyframes exist
-            model_matrix = np.zeros((4, 4), dtype=np.float32)
+            model_matrix = matrix_at(mesh.model_matrix, mesh.transform_keyframes, t)   # mesh at time t
 
             MVP = clip_projection @ view_matrix @ model_matrix
+            MVP = np.asarray(MVP, dtype=np.float32)
 
             root = render_pass.bind_pipeline(pipeline)
             cursor = spy.ShaderCursor(root)
@@ -811,7 +821,7 @@ def create_Kd_texture(slang_device, material, scene_dir):
     )
 
 def hw2_7(args):
-    slang_device = spy.create_device(type=spy.DeviceType.vulkan)
+    slang_device = spy.create_device(type=spy.DeviceType.metal)
     program = slang_device.load_program(
         "hw2/hw2_7.slang",
         ["vertex_main", "fragment_main"]
@@ -931,20 +941,22 @@ def hw2_7(args):
         t = t % scene.duration
         # HW 2.7 TODO: compute cam_to_world and view matrix
         # remember to handle animation if keyframes exist
-        cam_to_world = np.zeros((4, 4), dtype=np.float32)
-        view_matrix = np.zeros((4, 4), dtype=np.float32)
+        cam_to_world = matrix_at(camera.cam_to_world, camera.transform_keyframes, t)   # camera at time t
+        view_matrix = np.linalg.inv(cam_to_world)                                      # world -> camera
 
         render_pass = command_encoder.begin_render_pass(render_pass_desc)
 
         for mesh, gpu_mesh, Kd_texture in zip(scene.meshes, gpu_meshes, Kd_textures):
             # HW 2.7 TODO: compute the model matrix
             # remember to handle animation if keyframes exist
-            model_matrix = np.zeros((4, 4), dtype=np.float32)
+            model_matrix = matrix_at(mesh.model_matrix, mesh.transform_keyframes, t)   # mesh at time t
+            model_matrix = np.asarray(model_matrix, dtype=np.float32)                  # also sent to the GPU
 
             normal_matrix = np.linalg.inv(model_matrix[:3, :3]).T
             normal_matrix = np.asarray(normal_matrix, dtype=np.float32)
 
             MVP = clip_projection @ view_matrix @ model_matrix
+            MVP = np.asarray(MVP, dtype=np.float32)
 
             root = render_pass.bind_pipeline(pipeline)
             cursor = spy.ShaderCursor(root)
